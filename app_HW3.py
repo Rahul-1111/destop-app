@@ -30,6 +30,8 @@ from app.services.data_service import data_service
 from app.core.database import create_tables, SessionLocal, Part
 from app.schemas.readings import BalanceReadingCreate
 from app.utils.qr_utils import print_balance_readings, _load_state, _save_state, get_current_serial_and_part
+from pathlib import Path
+from app.core.config import settings
 
 class QRScanDialog(QDialog):
     def __init__(self, expected_value: str, timeout: int = 60, parent=None):
@@ -1081,7 +1083,7 @@ class HMIDesktopApp(QMainWindow):
         """
 
     def setup_enhanced_menu_bar(self):
-        """ENHANCED Menu Bar with ONLY 2 Professional Themes"""
+        """Enhanced Menu Bar with ROI Editor"""
         menubar = self.menuBar()
 
         # File menu
@@ -1101,15 +1103,21 @@ class HMIDesktopApp(QMainWindow):
         parts_action = QAction('⚙️ Manage Parts', self)
         parts_action.triggered.connect(self.open_part_management)
         tools_menu.addAction(parts_action)
+        
+        # **ADD ROI EDITOR HERE**
+        roi_action = QAction('📐 Edit ROI Regions', self)
+        roi_action.setShortcut('Ctrl+R')
+        roi_action.triggered.connect(self.open_roi_editor)
+        tools_menu.addAction(roi_action)
 
-        # Enhanced View menu with ONLY 3 Professional Themes
+        # View menu
         view_menu = menubar.addMenu('👁️ View')
         fullscreen_action = QAction('🖥️ Fullscreen', self)
         fullscreen_action.setShortcut('F11')
         fullscreen_action.triggered.connect(self.toggle_fullscreen)
         view_menu.addAction(fullscreen_action)
 
-        # PROFESSIONAL THEME SELECTION SUBMENU - ONLY 2 THEMES
+        # Theme menu
         theme_menu = view_menu.addMenu('🎨 Professional Themes')
         themes = [
             ("🏭 Modern Industrial Dark", "Modern Industrial Dark"),
@@ -1122,12 +1130,15 @@ class HMIDesktopApp(QMainWindow):
             theme_menu.addAction(action)
 
         view_menu.addSeparator()
-
-        # Keep existing toggle for compatibility
         theme_action = QAction('🌓 Toggle Dark/Light Mode', self)
         theme_action.setShortcut('Ctrl+T')
         theme_action.triggered.connect(self.toggle_theme)
         view_menu.addAction(theme_action)
+
+    def open_roi_editor(self):
+        """Open ROI Editor dialog"""
+        dialog = ROIEditorDialog(self)
+        dialog.exec_()
 
     def change_theme(self, theme_name):
         """Change to specific professional theme"""
@@ -1147,23 +1158,21 @@ class HMIDesktopApp(QMainWindow):
     def show_about(self):
         """Show enhanced about dialog"""
         QMessageBox.about(self, "About HMI System",
-                         """🏭 HMI Balance Machine OCR System - Professional Edition
-                         
-Version: 2.0.1 (with HW Support)
+                        """🏭 HMI Balance Machine OCR System - Professional Edition
+                        
+    Version: 2.0.1 (with HW Support)
 
-Enhanced with 2 Beautiful Industrial Themes
+    Enhanced with 2 Beautiful Industrial Themes
 
-Features:
-• Modern Industrial Dark
-• Industrial Orange
-• HW Push Button Support
-• Real-time Camera OCR
-• Part Management System
+    Features:
+    - Modern Industrial Dark
+    - Industrial Orange
+    - HW Push Button Support
+    - Real-time Camera OCR
+    - Part Management System
 
-Developed for Industrial Excellence ⚡
-HW Support: Push button triggers capture""")
-
-    # All your existing methods remain the same...
+    Developed for Industrial Excellence ⚡
+    HW Support: Push button triggers capture""")
 
     def start_camera_thread(self):
         """Start camera display thread"""
@@ -1245,8 +1254,14 @@ HW Support: Push button triggers capture""")
             QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {str(e)}")
 
     def toggle_roi_view(self):
+        """Toggle ROI visibility on camera feed"""
         self.show_roi = not self.show_roi
-        self.statusbar.showMessage(f"🔍 ROI {'On' if self.show_roi else 'Off'}")
+        if self.show_roi:
+            self.roi_view_btn.setText("🔎 Hide ROI")
+            self.statusbar.showMessage("📐 ROI boxes shown")
+        else:
+            self.roi_view_btn.setText("🔎 Show ROI")
+            self.statusbar.showMessage("📐 ROI boxes hidden")
 
     def load_parts(self):
         """Load parts into combo box"""
@@ -2053,6 +2068,633 @@ HW Support: Push button triggers capture""")
             pass
         
         event.accept()
+
+class ROIEditorDialog(QDialog):
+    """Interactive ROI Editor - drag and resize boxes visually"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ROI Editor - Drag to Adjust Regions")
+        self.setModal(True)
+        self.resize(1200, 900)
+        self.current_theme = getattr(parent, 'current_theme', 'Modern Industrial Dark')
+        
+        # Current frame
+        self.frame = None
+        self.display_frame = None
+        self.scale_factor = 1.0
+        
+        # ROI boxes (x, y, w, h, name, color)
+        self.roi_boxes = []
+        self.selected_box = None
+        self.drag_mode = None  # 'move', 'resize_br', 'resize_tl', etc.
+        self.drag_start_pos = None
+        self.drag_start_box = None
+        
+        self.setup_ui()
+        self.load_current_frame()
+        self.load_roi_boxes()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        self.setStyleSheet(self.get_stylesheet())
+        
+        # Instructions
+        instructions = QLabel(
+            "📐 ROI Editor Instructions:\n"
+            "• Click and drag box CENTER to MOVE\n"
+            "• Click and drag box CORNERS to RESIZE\n"
+            "• Click box to select (shows coordinates)\n"
+            "• Use Reset button to restore defaults"
+        )
+        instructions.setStyleSheet("font-size: 13px; padding: 10px; background: rgba(74,144,226,50); border-radius: 5px;")
+        layout.addWidget(instructions)
+        
+        # Main content - horizontal split
+        content_layout = QHBoxLayout()
+        
+        # Left side - Image display
+        image_container = QVBoxLayout()
+        
+        # Image label with scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumWidth(800)
+        
+        self.image_label = ClickableLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(640, 640)
+        self.image_label.mousePressEvent = self.on_mouse_press
+        self.image_label.mouseMoveEvent = self.on_mouse_move
+        self.image_label.mouseReleaseEvent = self.on_mouse_release
+        self.image_label.setMouseTracking(True)
+        
+        scroll_area.setWidget(self.image_label)
+        image_container.addWidget(scroll_area)
+        
+        # Zoom controls
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(QLabel("🔍 Zoom:"))
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setMinimum(50)
+        self.zoom_slider.setMaximum(200)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setTickPosition(QSlider.TicksBelow)
+        self.zoom_slider.setTickInterval(25)
+        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
+        zoom_layout.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel("100%")
+        zoom_layout.addWidget(self.zoom_label)
+        image_container.addLayout(zoom_layout)
+        
+        content_layout.addLayout(image_container, 3)
+        
+        # Right side - ROI list and controls
+        right_panel = QVBoxLayout()
+        
+        # ROI list
+        roi_group = QGroupBox("📦 ROI Regions")
+        roi_layout = QVBoxLayout(roi_group)
+        
+        self.roi_table = QTableWidget()
+        self.roi_table.setColumnCount(5)
+        self.roi_table.setHorizontalHeaderLabels(["Region", "X", "Y", "Width", "Height"])
+        self.roi_table.setColumnWidth(0, 100)
+        self.roi_table.setColumnWidth(1, 60)
+        self.roi_table.setColumnWidth(2, 60)
+        self.roi_table.setColumnWidth(3, 60)
+        self.roi_table.setColumnWidth(4, 60)
+        self.roi_table.cellChanged.connect(self.on_table_cell_changed)
+        roi_layout.addWidget(self.roi_table)
+        
+        right_panel.addWidget(roi_group)
+        
+        # Action buttons
+        button_layout = QVBoxLayout()
+        
+        self.save_btn = QPushButton("💾 Save ROI Settings")
+        self.save_btn.clicked.connect(self.save_roi_settings)
+        button_layout.addWidget(self.save_btn)
+        
+        self.reset_btn = QPushButton("🔄 Reset to Defaults")
+        self.reset_btn.clicked.connect(self.reset_to_defaults)
+        button_layout.addWidget(self.reset_btn)
+        
+        self.test_btn = QPushButton("🧪 Test OCR on ROIs")
+        self.test_btn.clicked.connect(self.test_ocr)
+        button_layout.addWidget(self.test_btn)
+        
+        self.close_btn = QPushButton("❌ Close")
+        self.close_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.close_btn)
+        
+        right_panel.addLayout(button_layout)
+        right_panel.addStretch()
+        
+        content_layout.addLayout(right_panel, 1)
+        
+        layout.addLayout(content_layout)
+        
+    def get_stylesheet(self):
+        """Match parent theme"""
+        if self.current_theme == "Modern Industrial Dark":
+            return """
+            QDialog {
+                background-color: #1E2D3A;
+                color: #FFFFFF;
+            }
+            QGroupBox {
+                background: rgba(42,63,79,200);
+                border: 2px solid #4A90E2;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                color: #4A90E2;
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 5px 10px;
+            }
+            QTableWidget {
+                background: rgba(55,71,79,220);
+                color: white;
+                border: 2px solid #546E7A;
+                border-radius: 5px;
+                gridline-color: #546E7A;
+            }
+            QHeaderView::section {
+                background: #4A90E2;
+                color: white;
+                border: 1px solid #357ABD;
+                padding: 5px;
+                font-weight: bold;
+            }
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4A90E2, stop:1 #357ABD);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px;
+                font-weight: bold;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #66B3FF, stop:1 #4A90E2);
+            }
+            QLabel {
+                color: white;
+            }
+            QSlider::groove:horizontal {
+                background: #546E7A;
+                height: 8px;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #4A90E2;
+                width: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+            }
+            """
+        else:
+            return """
+            QDialog {
+                background-color: #2C3E50;
+                color: #ECF0F1;
+            }
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #E67E22, stop:1 #D35400);
+                color: white;
+                border-radius: 8px;
+                padding: 10px;
+                font-weight: bold;
+            }
+            """
+    
+    def load_current_frame(self):
+        """Load current camera frame"""
+        self.frame = camera_service.get_current_frame()
+        if self.frame is None:
+            # Load a dummy frame
+            self.frame = np.zeros((640, 640), dtype=np.uint8)
+            cv2.putText(self.frame, "No Camera Frame", (200, 320), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        self.update_display()
+    
+    def load_roi_boxes(self):
+        """Load ROI boxes from settings"""
+        self.roi_boxes = [
+            {
+                'name': 'Angle L',
+                'x': settings.ROI_ANGLE1_X,
+                'y': settings.ROI_ANGLE1_Y,
+                'w': settings.ROI_ANGLE1_W,
+                'h': settings.ROI_ANGLE1_H,
+                'color': (0, 255, 0),  # Green
+                'setting_prefix': 'ROI_ANGLE1'
+            },
+            {
+                'name': 'Weight L',
+                'x': settings.ROI_WEIGHT1_X,
+                'y': settings.ROI_WEIGHT1_Y,
+                'w': settings.ROI_WEIGHT1_W,
+                'h': settings.ROI_WEIGHT1_H,
+                'color': (255, 255, 0),  # Cyan
+                'setting_prefix': 'ROI_WEIGHT1'
+            },
+            {
+                'name': 'Angle R',
+                'x': settings.ROI_ANGLE2_X,
+                'y': settings.ROI_ANGLE2_Y,
+                'w': settings.ROI_ANGLE2_W,
+                'h': settings.ROI_ANGLE2_H,
+                'color': (0, 255, 255),  # Yellow
+                'setting_prefix': 'ROI_ANGLE2'
+            },
+            {
+                'name': 'Weight R',
+                'x': settings.ROI_WEIGHT2_X,
+                'y': settings.ROI_WEIGHT2_Y,
+                'w': settings.ROI_WEIGHT2_W,
+                'h': settings.ROI_WEIGHT2_H,
+                'color': (255, 0, 255),  # Magenta
+                'setting_prefix': 'ROI_WEIGHT2'
+            }
+        ]
+        self.update_roi_table()
+        self.update_display()
+    
+    def update_roi_table(self):
+        """Update table with current ROI values"""
+        self.roi_table.blockSignals(True)  # Prevent triggering cellChanged
+        self.roi_table.setRowCount(len(self.roi_boxes))
+        
+        for i, box in enumerate(self.roi_boxes):
+            self.roi_table.setItem(i, 0, QTableWidgetItem(box['name']))
+            self.roi_table.setItem(i, 1, QTableWidgetItem(str(box['x'])))
+            self.roi_table.setItem(i, 2, QTableWidgetItem(str(box['y'])))
+            self.roi_table.setItem(i, 3, QTableWidgetItem(str(box['w'])))
+            self.roi_table.setItem(i, 4, QTableWidgetItem(str(box['h'])))
+            
+            # Make name column read-only
+            self.roi_table.item(i, 0).setFlags(Qt.ItemIsEnabled)
+        
+        self.roi_table.blockSignals(False)
+    
+    def update_display(self):
+        """Update the display with ROI boxes drawn"""
+        if self.frame is None:
+            return
+        
+        # Create display frame
+        if len(self.frame.shape) == 2:
+            self.display_frame = cv2.cvtColor(self.frame, cv2.COLOR_GRAY2BGR)
+        else:
+            self.display_frame = self.frame.copy()
+        
+        # Draw ROI boxes
+        for i, box in enumerate(self.roi_boxes):
+            x, y, w, h = box['x'], box['y'], box['w'], box['h']
+            color = box['color']
+            
+            # Draw rectangle
+            thickness = 3 if i == self.selected_box else 2
+            cv2.rectangle(self.display_frame, (x, y), (x + w, y + h), color, thickness)
+            
+            # Draw corner handles for selected box
+            if i == self.selected_box:
+                handle_size = 8
+                # Top-left
+                cv2.circle(self.display_frame, (x, y), handle_size, color, -1)
+                # Top-right
+                cv2.circle(self.display_frame, (x + w, y), handle_size, color, -1)
+                # Bottom-left
+                cv2.circle(self.display_frame, (x, y + h), handle_size, color, -1)
+                # Bottom-right
+                cv2.circle(self.display_frame, (x + w, y + h), handle_size, color, -1)
+            
+            # Draw label
+            label = f"{box['name']}: {w}x{h}"
+            cv2.putText(self.display_frame, label, (x, y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Convert to QPixmap with zoom
+        height, width, channel = self.display_frame.shape
+        bytes_per_line = 3 * width
+        qt_image = QImage(self.display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        
+        # Apply zoom
+        scaled_width = int(width * self.scale_factor)
+        scaled_height = int(height * self.scale_factor)
+        qt_image = qt_image.scaled(scaled_width, scaled_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        pixmap = QPixmap.fromImage(qt_image)
+        self.image_label.setPixmap(pixmap)
+        self.image_label.resize(pixmap.size())
+    
+    def on_zoom_changed(self, value):
+        """Handle zoom slider change"""
+        self.scale_factor = value / 100.0
+        self.zoom_label.setText(f"{value}%")
+        self.update_display()
+    
+    def get_click_coords(self, event):
+        """Convert click position to image coordinates"""
+        if self.display_frame is None:
+            return None, None
+        
+        # Get click position relative to label
+        x = event.pos().x()
+        y = event.pos().y()
+        
+        # Convert to image coordinates (account for zoom)
+        img_x = int(x / self.scale_factor)
+        img_y = int(y / self.scale_factor)
+        
+        return img_x, img_y
+    
+    def on_mouse_press(self, event):
+        """Handle mouse press - start drag"""
+        img_x, img_y = self.get_click_coords(event)
+        if img_x is None:
+            return
+        
+        # Check if clicking on a box
+        for i, box in enumerate(self.roi_boxes):
+            x, y, w, h = box['x'], box['y'], box['w'], box['h']
+            
+            # Check corners first (resize handles)
+            handle_size = 10
+            if abs(img_x - x) < handle_size and abs(img_y - y) < handle_size:
+                self.selected_box = i
+                self.drag_mode = 'resize_tl'
+                self.drag_start_pos = (img_x, img_y)
+                self.drag_start_box = (x, y, w, h)
+                return
+            elif abs(img_x - (x + w)) < handle_size and abs(img_y - y) < handle_size:
+                self.selected_box = i
+                self.drag_mode = 'resize_tr'
+                self.drag_start_pos = (img_x, img_y)
+                self.drag_start_box = (x, y, w, h)
+                return
+            elif abs(img_x - x) < handle_size and abs(img_y - (y + h)) < handle_size:
+                self.selected_box = i
+                self.drag_mode = 'resize_bl'
+                self.drag_start_pos = (img_x, img_y)
+                self.drag_start_box = (x, y, w, h)
+                return
+            elif abs(img_x - (x + w)) < handle_size and abs(img_y - (y + h)) < handle_size:
+                self.selected_box = i
+                self.drag_mode = 'resize_br'
+                self.drag_start_pos = (img_x, img_y)
+                self.drag_start_box = (x, y, w, h)
+                return
+            
+            # Check if inside box (move mode)
+            elif x <= img_x <= x + w and y <= img_y <= y + h:
+                self.selected_box = i
+                self.drag_mode = 'move'
+                self.drag_start_pos = (img_x, img_y)
+                self.drag_start_box = (x, y, w, h)
+                self.update_display()
+                return
+        
+        # Clicked outside all boxes - deselect
+        self.selected_box = None
+        self.update_display()
+    
+    def on_mouse_move(self, event):
+        """Handle mouse move - drag box or resize"""
+        if self.drag_mode is None or self.selected_box is None:
+            # Change cursor based on hover position
+            img_x, img_y = self.get_click_coords(event)
+            if img_x is None:
+                return
+            
+            for box in self.roi_boxes:
+                x, y, w, h = box['x'], box['y'], box['w'], box['h']
+                handle_size = 10
+                
+                # Check corners
+                if abs(img_x - x) < handle_size and abs(img_y - y) < handle_size:
+                    self.image_label.setCursor(Qt.SizeFDiagCursor)
+                    return
+                elif abs(img_x - (x + w)) < handle_size and abs(img_y - (y + h)) < handle_size:
+                    self.image_label.setCursor(Qt.SizeFDiagCursor)
+                    return
+                elif abs(img_x - (x + w)) < handle_size and abs(img_y - y) < handle_size:
+                    self.image_label.setCursor(Qt.SizeBDiagCursor)
+                    return
+                elif abs(img_x - x) < handle_size and abs(img_y - (y + h)) < handle_size:
+                    self.image_label.setCursor(Qt.SizeBDiagCursor)
+                    return
+                elif x <= img_x <= x + w and y <= img_y <= y + h:
+                    self.image_label.setCursor(Qt.SizeAllCursor)
+                    return
+            
+            self.image_label.setCursor(Qt.ArrowCursor)
+            return
+        
+        # Dragging
+        img_x, img_y = self.get_click_coords(event)
+        if img_x is None:
+            return
+        
+        dx = img_x - self.drag_start_pos[0]
+        dy = img_y - self.drag_start_pos[1]
+        
+        box = self.roi_boxes[self.selected_box]
+        start_x, start_y, start_w, start_h = self.drag_start_box
+        
+        if self.drag_mode == 'move':
+            box['x'] = max(0, start_x + dx)
+            box['y'] = max(0, start_y + dy)
+        elif self.drag_mode == 'resize_tl':
+            new_x = start_x + dx
+            new_y = start_y + dy
+            box['x'] = max(0, new_x)
+            box['y'] = max(0, new_y)
+            box['w'] = start_w + (start_x - box['x'])
+            box['h'] = start_h + (start_y - box['y'])
+        elif self.drag_mode == 'resize_tr':
+            box['y'] = max(0, start_y + dy)
+            box['w'] = max(10, start_w + dx)
+            box['h'] = start_h + (start_y - box['y'])
+        elif self.drag_mode == 'resize_bl':
+            box['x'] = max(0, start_x + dx)
+            box['w'] = start_w + (start_x - box['x'])
+            box['h'] = max(10, start_h + dy)
+        elif self.drag_mode == 'resize_br':
+            box['w'] = max(10, start_w + dx)
+            box['h'] = max(10, start_h + dy)
+        
+        # Ensure minimum size
+        box['w'] = max(20, box['w'])
+        box['h'] = max(20, box['h'])
+        
+        self.update_display()
+        self.update_roi_table()
+    
+    def on_mouse_release(self, event):
+        """Handle mouse release - end drag"""
+        self.drag_mode = None
+        self.drag_start_pos = None
+        self.drag_start_box = None
+    
+    def on_table_cell_changed(self, row, col):
+        """Handle manual table edit"""
+        if col == 0:  # Name column is read-only
+            return
+        
+        try:
+            value = int(self.roi_table.item(row, col).text())
+            if col == 1:
+                self.roi_boxes[row]['x'] = max(0, value)
+            elif col == 2:
+                self.roi_boxes[row]['y'] = max(0, value)
+            elif col == 3:
+                self.roi_boxes[row]['w'] = max(20, value)
+            elif col == 4:
+                self.roi_boxes[row]['h'] = max(20, value)
+            
+            self.update_display()
+        except ValueError:
+            self.update_roi_table()  # Reset invalid value
+    
+    def save_roi_settings(self):
+        """Save ROI settings to config file"""
+        try:
+            
+            config_path = Path("app/core/config.py")
+            
+            # Read current config
+            with open(config_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Update ROI values
+            for box in self.roi_boxes:
+                prefix = box['setting_prefix']
+                for i, line in enumerate(lines):
+                    if f"{prefix}_X:" in line:
+                        lines[i] = f"    {prefix}_X: int = {box['x']}\n"
+                    elif f"{prefix}_Y:" in line:
+                        lines[i] = f"    {prefix}_Y: int = {box['y']}\n"
+                    elif f"{prefix}_W:" in line:
+                        lines[i] = f"    {prefix}_W: int = {box['w']}\n"
+                    elif f"{prefix}_H:" in line:
+                        lines[i] = f"    {prefix}_H: int = {box['h']}\n"
+            
+            # Write back
+            with open(config_path, 'w') as f:
+                f.writelines(lines)
+            
+            # Also update .env file
+            self.save_to_env_file()
+            
+            # Reload settings
+            import importlib
+            from app.core import config
+            importlib.reload(config)
+            
+            QMessageBox.information(self, "Success", 
+                "✅ ROI settings saved to config.py and .env!\n\n"
+                "The application will use these new ROI coordinates.")
+            self.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", 
+                f"❌ Failed to save settings:\n{str(e)}")
+
+    def save_to_env_file(self):
+        """Also save ROI settings to .env file"""
+        try:
+            from pathlib import Path
+            
+            env_path = Path(".env")
+            
+            if not env_path.exists():
+                return
+            
+            # Read .env
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Update ROI values in .env
+            for box in self.roi_boxes:
+                prefix = box['setting_prefix']
+                for i, line in enumerate(lines):
+                    if line.startswith(f"{prefix}_X="):
+                        lines[i] = f"{prefix}_X={box['x']}\n"
+                    elif line.startswith(f"{prefix}_Y="):
+                        lines[i] = f"{prefix}_Y={box['y']}\n"
+                    elif line.startswith(f"{prefix}_W="):
+                        lines[i] = f"{prefix}_W={box['w']}\n"
+                    elif line.startswith(f"{prefix}_H="):
+                        lines[i] = f"{prefix}_H={box['h']}\n"
+            
+            # Write back
+            with open(env_path, 'w') as f:
+                f.writelines(lines)
+                
+        except Exception as e:
+            print(f"Warning: Could not update .env file: {e}")
+    
+    def reset_to_defaults(self):
+        """Reset ROI boxes to default values"""
+        reply = QMessageBox.question(self, "Reset ROI",
+            "⚠️ Reset all ROI regions to default values?\n\n"
+            "This will restore the original coordinates.",
+            QMessageBox.Yes | QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            # Default values
+            defaults = {
+                'ROI_ANGLE1': (101, 434, 139, 81),
+                'ROI_WEIGHT1': (56, 333, 217, 90),
+                'ROI_ANGLE2': (445, 417, 106, 57),
+                'ROI_WEIGHT2': (420, 324, 165, 78)
+            }
+            
+            for box in self.roi_boxes:
+                prefix = box['setting_prefix']
+                if prefix in defaults:
+                    x, y, w, h = defaults[prefix]
+                    box['x'] = x
+                    box['y'] = y
+                    box['w'] = w
+                    box['h'] = h
+            
+            self.update_roi_table()
+            self.update_display()
+    
+    def test_ocr(self):
+        """Test OCR on current ROI regions"""
+        if self.frame is None:
+            QMessageBox.warning(self, "No Frame", "No camera frame available for testing.")
+            return
+        
+        results = []
+        for box in self.roi_boxes:
+            x, y, w, h = box['x'], box['y'], box['w'], box['h']
+            roi = self.frame[y:y+h, x:x+w]
+            
+            # Run OCR
+            value, confidence = ocr_service.extract_numeric_value(roi)
+            results.append(f"{box['name']}: {value} (conf: {confidence:.1%})")
+        
+        QMessageBox.information(self, "OCR Test Results",
+            "🧪 OCR Test Results:\n\n" + "\n".join(results))
+
+
+class ClickableLabel(QLabel):
+    """QLabel that accepts mouse events"""
+    pass
 
 def main():
     """Main application entry point"""

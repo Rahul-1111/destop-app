@@ -27,22 +27,22 @@ class Settings(BaseSettings):
     ROI_ANGLE1_X: int = 101
     ROI_ANGLE1_Y: int = 434
     ROI_ANGLE1_W: int = 139
-    ROI_ANGLE1_H: int = 81 
+    ROI_ANGLE1_H: int = 81
 
     ROI_WEIGHT1_X: int = 56
     ROI_WEIGHT1_Y: int = 333
-    ROI_WEIGHT1_W: int = 217 
-    ROI_WEIGHT1_H: int = 90 
+    ROI_WEIGHT1_W: int = 217
+    ROI_WEIGHT1_H: int = 90
 
     ROI_ANGLE2_X: int = 445
     ROI_ANGLE2_Y: int = 417
     ROI_ANGLE2_W: int = 106
-    ROI_ANGLE2_H: int = 57 
+    ROI_ANGLE2_H: int = 57
 
-    ROI_WEIGHT2_X: int =420
-    ROI_WEIGHT2_Y: int =324
-    ROI_WEIGHT2_W: int =165 
-    ROI_WEIGHT2_H: int =78 
+    ROI_WEIGHT2_X: int = 420
+    ROI_WEIGHT2_Y: int = 324
+    ROI_WEIGHT2_W: int = 165
+    ROI_WEIGHT2_H: int = 78
 
     # Directories
     DATA_DIR: str = "./data"
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Pydantic v2 model config
     model_config = SettingsConfigDict(
         env_file=".env",
-        extra="ignore"                 # Prevents errors for unknown .env keys
+        extra="ignore"                 # Prevents errors for unknown .env keys 
     )
 
 settings = Settings()
