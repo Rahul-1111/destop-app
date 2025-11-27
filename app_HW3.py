@@ -1138,7 +1138,22 @@ class HMIDesktopApp(QMainWindow):
     def open_roi_editor(self):
         """Open ROI Editor dialog"""
         dialog = ROIEditorDialog(self)
-        dialog.exec_()
+        if dialog.exec_() == QDialog.Accepted:
+            # Reload settings immediately after successful save
+            if self.reload_settings_live():
+                self.show_auto_popup(
+                    "Settings Applied",
+                    "✅ New ROI coordinates are now active!\n\nNo restart required.",
+                    popup_type="success",
+                    duration=3000
+                )
+            else:
+                self.show_auto_popup(
+                    "Reload Failed",
+                    "⚠️ Please restart the application\nto apply ROI changes.",
+                    popup_type="warning",
+                    duration=4000
+                )
 
     def change_theme(self, theme_name):
         """Change to specific professional theme"""
@@ -2069,6 +2084,85 @@ class HMIDesktopApp(QMainWindow):
         
         event.accept()
 
+    def reload_settings_live(self):
+        """Reload settings from .env file without restarting"""
+        try:
+            import os
+            from pathlib import Path
+            
+            # 1. Reload .env file into environment
+            env_path = Path(".env")
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            # Remove quotes if present
+                            value = value.strip().strip('"').strip("'")
+                            os.environ[key.strip()] = value
+            
+            # 2. Force reload the config module
+            import importlib
+            if 'app.core.config' in sys.modules:
+                del sys.modules['app.core.config']
+            
+            # 3. Re-import settings
+            from app.core.config import Settings
+            new_settings = Settings()
+            
+            # 4. Update the global settings object
+            import app.core.config as config_module
+            config_module.settings = new_settings
+            
+            # 5. Update references in services
+            try:
+                # Update camera_service reference
+                from app.services.camera_service import camera_service
+                if hasattr(camera_service, 'settings'):
+                    camera_service.settings = new_settings
+                
+                # Update ocr_service reference  
+                from app.services.ocr_service import ocr_service
+                if hasattr(ocr_service, 'settings'):
+                    ocr_service.settings = new_settings
+            except Exception as e:
+                print(f"Note: Could not update service references: {e}")
+            
+            # 6. Update local reference
+            globals()['settings'] = new_settings
+            
+            # 7. Verify the reload worked
+            print(f"✅ Settings reloaded:")
+            print(f"  ROI_ANGLE1: X={new_settings.ROI_ANGLE1_X}, Y={new_settings.ROI_ANGLE1_Y}, W={new_settings.ROI_ANGLE1_W}, H={new_settings.ROI_ANGLE1_H}")
+            print(f"  ROI_WEIGHT1: X={new_settings.ROI_WEIGHT1_X}, Y={new_settings.ROI_WEIGHT1_Y}, W={new_settings.ROI_WEIGHT1_W}, H={new_settings.ROI_WEIGHT1_H}")
+            
+            self.statusbar.showMessage("✅ ROI settings reloaded - Changes active immediately!")
+            
+            return True
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"❌ Failed to reload settings: {error_trace}")
+            self.statusbar.showMessage(f"❌ Failed to reload settings: {str(e)}")
+            return False
+        
+    def verify_roi_reload(self):
+        """Show a visual confirmation that ROI changed"""
+        from app.core.config import settings as current_settings
+        
+        # Create a toast with the new coordinates
+        roi_info = (
+            f"New ROI Coordinates:\n"
+            f"Angle L: ({current_settings.ROI_ANGLE1_X}, {current_settings.ROI_ANGLE1_Y}) "
+            f"{current_settings.ROI_ANGLE1_W}x{current_settings.ROI_ANGLE1_H}\n"
+            f"Weight L: ({current_settings.ROI_WEIGHT1_X}, {current_settings.ROI_WEIGHT1_Y}) "
+            f"{current_settings.ROI_WEIGHT1_W}x{current_settings.ROI_WEIGHT1_H}"
+        )
+        
+        print(roi_info)  # Also log to console
+
 class ROIEditorDialog(QDialog):
     """Interactive ROI Editor - drag and resize boxes visually"""
     
@@ -2288,41 +2382,44 @@ class ROIEditorDialog(QDialog):
         self.update_display()
     
     def load_roi_boxes(self):
-        """Load ROI boxes from settings"""
+        """Load ROI boxes from CURRENT settings (.env takes priority)"""
+        # Force reload settings to get latest .env values
+        from app.core.config import settings as current_settings
+        
         self.roi_boxes = [
             {
                 'name': 'Angle L',
-                'x': settings.ROI_ANGLE1_X,
-                'y': settings.ROI_ANGLE1_Y,
-                'w': settings.ROI_ANGLE1_W,
-                'h': settings.ROI_ANGLE1_H,
+                'x': current_settings.ROI_ANGLE1_X,
+                'y': current_settings.ROI_ANGLE1_Y,
+                'w': current_settings.ROI_ANGLE1_W,
+                'h': current_settings.ROI_ANGLE1_H,
                 'color': (0, 255, 0),  # Green
                 'setting_prefix': 'ROI_ANGLE1'
             },
             {
                 'name': 'Weight L',
-                'x': settings.ROI_WEIGHT1_X,
-                'y': settings.ROI_WEIGHT1_Y,
-                'w': settings.ROI_WEIGHT1_W,
-                'h': settings.ROI_WEIGHT1_H,
+                'x': current_settings.ROI_WEIGHT1_X,
+                'y': current_settings.ROI_WEIGHT1_Y,
+                'w': current_settings.ROI_WEIGHT1_W,
+                'h': current_settings.ROI_WEIGHT1_H,
                 'color': (255, 255, 0),  # Cyan
                 'setting_prefix': 'ROI_WEIGHT1'
             },
             {
                 'name': 'Angle R',
-                'x': settings.ROI_ANGLE2_X,
-                'y': settings.ROI_ANGLE2_Y,
-                'w': settings.ROI_ANGLE2_W,
-                'h': settings.ROI_ANGLE2_H,
+                'x': current_settings.ROI_ANGLE2_X,
+                'y': current_settings.ROI_ANGLE2_Y,
+                'w': current_settings.ROI_ANGLE2_W,
+                'h': current_settings.ROI_ANGLE2_H,
                 'color': (0, 255, 255),  # Yellow
                 'setting_prefix': 'ROI_ANGLE2'
             },
             {
                 'name': 'Weight R',
-                'x': settings.ROI_WEIGHT2_X,
-                'y': settings.ROI_WEIGHT2_Y,
-                'w': settings.ROI_WEIGHT2_W,
-                'h': settings.ROI_WEIGHT2_H,
+                'x': current_settings.ROI_WEIGHT2_X,
+                'y': current_settings.ROI_WEIGHT2_Y,
+                'w': current_settings.ROI_WEIGHT2_W,
+                'h': current_settings.ROI_WEIGHT2_H,
                 'color': (255, 0, 255),  # Magenta
                 'setting_prefix': 'ROI_WEIGHT2'
             }
@@ -2568,62 +2665,22 @@ class ROIEditorDialog(QDialog):
             self.update_roi_table()  # Reset invalid value
     
     def save_roi_settings(self):
-        """Save ROI settings to config file"""
+        """Save ROI settings to .env file and apply immediately"""
         try:
-            
-            config_path = Path("app/core/config.py")
-            
-            # Read current config
-            with open(config_path, 'r') as f:
-                lines = f.readlines()
-            
-            # Update ROI values
-            for box in self.roi_boxes:
-                prefix = box['setting_prefix']
-                for i, line in enumerate(lines):
-                    if f"{prefix}_X:" in line:
-                        lines[i] = f"    {prefix}_X: int = {box['x']}\n"
-                    elif f"{prefix}_Y:" in line:
-                        lines[i] = f"    {prefix}_Y: int = {box['y']}\n"
-                    elif f"{prefix}_W:" in line:
-                        lines[i] = f"    {prefix}_W: int = {box['w']}\n"
-                    elif f"{prefix}_H:" in line:
-                        lines[i] = f"    {prefix}_H: int = {box['h']}\n"
-            
-            # Write back
-            with open(config_path, 'w') as f:
-                f.writelines(lines)
-            
-            # Also update .env file
-            self.save_to_env_file()
-            
-            # Reload settings
-            import importlib
-            from app.core import config
-            importlib.reload(config)
-            
-            QMessageBox.information(self, "Success", 
-                "✅ ROI settings saved to config.py and .env!\n\n"
-                "The application will use these new ROI coordinates.")
-            self.accept()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", 
-                f"❌ Failed to save settings:\n{str(e)}")
-
-    def save_to_env_file(self):
-        """Also save ROI settings to .env file"""
-        try:
-            from pathlib import Path
-            
             env_path = Path(".env")
             
             if not env_path.exists():
+                QMessageBox.warning(self, "Warning", 
+                    "⚠️ .env file not found!\n\n"
+                    "Cannot save ROI settings.")
                 return
             
-            # Read .env
-            with open(env_path, 'r') as f:
+            # Read current .env
+            with open(env_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
+            
+            # Track which settings we updated
+            updated_count = 0
             
             # Update ROI values in .env
             for box in self.roi_boxes:
@@ -2631,29 +2688,82 @@ class ROIEditorDialog(QDialog):
                 for i, line in enumerate(lines):
                     if line.startswith(f"{prefix}_X="):
                         lines[i] = f"{prefix}_X={box['x']}\n"
+                        updated_count += 1
                     elif line.startswith(f"{prefix}_Y="):
                         lines[i] = f"{prefix}_Y={box['y']}\n"
+                        updated_count += 1
                     elif line.startswith(f"{prefix}_W="):
                         lines[i] = f"{prefix}_W={box['w']}\n"
+                        updated_count += 1
                     elif line.startswith(f"{prefix}_H="):
                         lines[i] = f"{prefix}_H={box['h']}\n"
+                        updated_count += 1
             
-            # Write back
-            with open(env_path, 'w') as f:
+            # Write back to .env
+            with open(env_path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
-                
+            
+            # Also update config.py for reference (optional but good for consistency)
+            try:
+                config_path = Path("app/core/config.py")
+                if config_path.exists():
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_lines = f.readlines()
+                    
+                    for box in self.roi_boxes:
+                        prefix = box['setting_prefix']
+                        for i, line in enumerate(config_lines):
+                            if f"{prefix}_X:" in line and "int" in line:
+                                config_lines[i] = f"    {prefix}_X: int = {box['x']}\n"
+                            elif f"{prefix}_Y:" in line and "int" in line:
+                                config_lines[i] = f"    {prefix}_Y: int = {box['y']}\n"
+                            elif f"{prefix}_W:" in line and "int" in line:
+                                config_lines[i] = f"    {prefix}_W: int = {box['w']}\n"
+                            elif f"{prefix}_H:" in line and "int" in line:
+                                config_lines[i] = f"    {prefix}_H: int = {box['h']}\n"
+                    
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        f.writelines(config_lines)
+            except Exception as e:
+                print(f"Note: Could not update config.py: {e}")
+            
+            # Show success message with live reload option
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Settings Saved")
+            msg.setText(
+                f"✅ ROI settings saved successfully!\n\n"
+                f"Updated {updated_count} coordinates in .env file.\n\n"
+                f"Changes will be applied when you close this dialog."
+            )
+            msg.setInformativeText(
+                "The new ROI coordinates will be loaded automatically.\n"
+                "Restart required!"
+            )
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec_()
+            
+            self.accept()  # Close dialog
+            
         except Exception as e:
-            print(f"Warning: Could not update .env file: {e}")
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"Save error: {error_trace}")
+            QMessageBox.critical(self, "Error", 
+                f"❌ Failed to save settings:\n\n{str(e)}\n\n"
+                f"Check console for details.")
     
     def reset_to_defaults(self):
         """Reset ROI boxes to default values"""
         reply = QMessageBox.question(self, "Reset ROI",
             "⚠️ Reset all ROI regions to default values?\n\n"
-            "This will restore the original coordinates.",
+            "This will restore the original coordinates.\n"
+            "(Values will be updated in the editor only,\n"
+            "you still need to click Save to apply them.)",
             QMessageBox.Yes | QMessageBox.No)
         
         if reply == QMessageBox.Yes:
-            # Default values
+            # Default values (from your config.py)
             defaults = {
                 'ROI_ANGLE1': (101, 434, 139, 81),
                 'ROI_WEIGHT1': (56, 333, 217, 90),
@@ -2672,29 +2782,50 @@ class ROIEditorDialog(QDialog):
             
             self.update_roi_table()
             self.update_display()
+            
+            QMessageBox.information(self, "Reset Complete",
+                "✅ ROI regions reset to defaults!\n\n"
+                "Click 'Save ROI Settings' to apply these changes.")
     
     def test_ocr(self):
         """Test OCR on current ROI regions"""
         if self.frame is None:
-            QMessageBox.warning(self, "No Frame", "No camera frame available for testing.")
+            QMessageBox.warning(self, "No Frame", 
+                "❌ No camera frame available for testing.\n\n"
+                "Please ensure the camera is connected.")
             return
         
         results = []
         for box in self.roi_boxes:
             x, y, w, h = box['x'], box['y'], box['w'], box['h']
+            
+            # Validate coordinates
+            if y + h > self.frame.shape[0] or x + w > self.frame.shape[1]:
+                results.append(f"{box['name']}: ERROR - Out of bounds!")
+                continue
+                
             roi = self.frame[y:y+h, x:x+w]
             
             # Run OCR
-            value, confidence = ocr_service.extract_numeric_value(roi)
-            results.append(f"{box['name']}: {value} (conf: {confidence:.1%})")
+            try:
+                value, confidence = ocr_service.extract_numeric_value(roi)
+                if value is not None:
+                    results.append(f"{box['name']}: {value} (confidence: {confidence:.1%})")
+                else:
+                    results.append(f"{box['name']}: No value detected (confidence: {confidence:.1%})")
+            except Exception as e:
+                results.append(f"{box['name']}: ERROR - {str(e)}")
         
         QMessageBox.information(self, "OCR Test Results",
-            "🧪 OCR Test Results:\n\n" + "\n".join(results))
+            "🧪 OCR Test Results:\n\n" + "\n".join(results) + "\n\n"
+            "These are live OCR readings from the current\n"
+            "camera frame using the ROI coordinates shown.")
 
 
 class ClickableLabel(QLabel):
     """QLabel that accepts mouse events"""
     pass
+
 
 def main():
     """Main application entry point"""
@@ -2707,6 +2838,7 @@ def main():
     
     # Run application
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()
