@@ -1,6 +1,3 @@
-"""
-Data service for database operations.
-"""
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional, List, Tuple
@@ -11,7 +8,7 @@ logging.disable(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 
 from app.models.readings import BalanceReading
-from app.schemas.readings import BalanceReadingCreate  # Use a dataclass, not pydantic, for desktop!
+from app.schemas.readings import BalanceReadingCreate
 from app.core.database import Part
 
 class DataService:
@@ -22,7 +19,6 @@ class DataService:
     def create_reading(self, db: Session, reading_data: BalanceReadingCreate) -> BalanceReading:
         """Create a new balance reading record."""
         try:
-            # Replace .dict() with vars() if using dataclass, or asdict() if imported from dataclasses
             db_reading = BalanceReading(**vars(reading_data))
             db.add(db_reading)
             db.commit()
@@ -57,36 +53,29 @@ class DataService:
         db: Session,
         part_code: str,
         part_name: str,
-        angle1_min: float = None,
-        angle1_max: float = None,
-        angle2_min: float = None,
-        angle2_max: float = None,
-        weight1_min: float = None,
-        weight1_max: float = None,
-        weight2_min: float = None,
-        weight2_max: float = None
+        angle1_min=None,  # Ignored (for backward compatibility)
+        angle1_max=None,  # Ignored
+        angle2_min=None,  # Ignored
+        angle2_max=None,  # Ignored
+        weight1_min=None,
+        weight1_max=None,
+        weight2_min=None,
+        weight2_max=None
     ):
-        """Insert a new part into the parts table, with optional min/max values."""
-        try:
-            part = Part(
-                part_code=part_code,
-                part_name=part_name,
-                angle1_min=angle1_min,
-                angle1_max=angle1_max,
-                angle2_min=angle2_min,
-                angle2_max=angle2_max,
-                weight1_min=weight1_min,
-                weight1_max=weight1_max,
-                weight2_min=weight2_min,
-                weight2_max=weight2_max
-            )
-            db.add(part)
-            db.commit()
-            db.refresh(part)
-            return part
-        except Exception:
-            db.rollback()
-            raise
+        """Add new part - ANGLE THRESHOLDS IGNORED"""
+        part = Part(
+            part_code=part_code,
+            part_name=part_name,
+            # ❌ NO angle fields - removed from database
+            weight1_min=weight1_min,
+            weight1_max=weight1_max,
+            weight2_min=weight2_min,
+            weight2_max=weight2_max
+        )
+        db.add(part)
+        db.commit()
+        db.refresh(part)
+        return part
 
     def get_all_parts(self, db: Session):
         """Get a list of all parts."""

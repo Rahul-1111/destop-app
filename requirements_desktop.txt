@@ -1,9 +1,7 @@
-# requirements.txt for Desktop Application
-
-# Core GUI framework
+# Core GUI
 PyQt5==5.15.9
 
-# Computer Vision and OCR
+# Computer Vision & OCR
 opencv-python==4.8.1.78
 easyocr==1.7.0
 numpy==1.24.3
@@ -11,20 +9,21 @@ Pillow==9.5.0
 
 # Database
 SQLAlchemy==2.0.21
-alembic==1.12.0
 
-# Data processing
+# Data Processing
 pandas==2.0.3
 
-# Pydantic for data validation (keep your existing schemas)
+# Validation
 pydantic==2.4.2
 pydantic-settings==2.0.3
 
-# QR Code and printing (if you use these)
+# QR & Printing
 qrcode==7.4.2
 reportlab==4.0.4
-
-# Build tools (for creating EXE)
-cx-Freeze==6.15.10
-# Alternative: PyInstaller==6.0.0
 zebra==0.2.1
+
+# Serial Communication (Arduino)
+pyserial==3.5
+
+# Build Tool
+cx-Freeze==6.15.10
