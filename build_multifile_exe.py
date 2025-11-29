@@ -1,54 +1,66 @@
 #!/usr/bin/env python3
+"""
+build_exe.py – Final working version for HMI OCR System
+Includes EasyOCR, Torch, TorchVision, Models, .env, Icons, UI.
+"""
+
 import os
 import PyInstaller.__main__
 
-print("\n==============================================")
-print("🏗️  Building MULTI-FILE HMI OCR System")
-print("==============================================\n")
+APP_NAME = "HMI_OCR_System"
+ICON_PATH = "app/BX.ico"
+ENV_FILE = ".env"
+ENTRY_FILE = "main_desktop_app.py"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MAIN_SCRIPT = os.path.join(BASE_DIR, "main_desktop_app.py")
-ICON_PATH = os.path.join(BASE_DIR, "app", "BX.ico")
-ENV_FILE = os.path.join(BASE_DIR, ".env")
+print("=" * 80)
+print("🏗️  Building HMI OCR System with PyInstaller")
+print("=" * 80)
 
-# Correct OS formatting
-env_target = ".;."
-if os.name == "nt":
-    env_target = f"{ENV_FILE};."
+# Check icon
+if os.path.exists(ICON_PATH):
+    print(f"✅ Icon found: {ICON_PATH}")
+else:
+    print("❌ Icon not found, continuing without icon...")
 
-print("🔨 Running PyInstaller...\n")
+# Check .env
+if os.path.exists(ENV_FILE):
+    print(f"📌 Adding .env → {ENV_FILE};.")
+else:
+    print("⚠️ No .env file found")
 
+# ---- BUILD COMMAND ----
 PyInstaller.__main__.run([
-    MAIN_SCRIPT,                 # Main script FIRST (important)
-
-    "--name=HMI_OCR_System",
-    "--icon=" + ICON_PATH,
-    "--onedir",                  # <---- MULTI-FILE (FAST LOADING)
-    "--windowed",
-    "--clean",
+    ENTRY_FILE,
+    "--name", APP_NAME,
+    "--onefile",
     "--noconsole",
+    "--icon", ICON_PATH,
 
-    # Add environment file
-    f"--add-data={ENV_FILE};.",
+    # Bundle project folders
+    "--add-data", "app;app",
+    "--add-data", f"{ENV_FILE};.",
 
-    # Required OCR/ML packages
+    # Hidden imports (required for EasyOCR)
     "--hidden-import=easyocr",
     "--hidden-import=torch",
     "--hidden-import=torchvision",
-    "--collect-all=easyocr",
-    "--collect-all=torch",
-    "--collect-all=torchvision",
+    "--hidden-import=serial",
+    "--hidden-import=cv2",
+    "--hidden-import=numpy",
+    "--hidden-import=PIL",
 
-    # Add dependencies for OpenCV, pillow, numpy
-    "--collect-all=cv2",
-    "--collect-all=PIL",
-    "--collect-all=numpy",
-
-    "--log-level=WARN",
+    # Optimize output
+    "--clean",
+    "--collect-all", "easyocr",
+    "--collect-all", "torch",
+    "--collect-all", "torchvision",
 ])
 
-print("\n==============================================")
-print("🎉 MULTI-FILE BUILD COMPLETE!")
-print("==============================================")
-print("📦 EXE located at: dist/HMI_OCR_System/")
-print("🚀 FAST loading – No extraction time.\n")
+print("\n" + "=" * 80)
+print("✅ Build complete!")
+print("=" * 80)
+print(f"📦 EXE located at: dist\\{APP_NAME}\\{APP_NAME}.exe\n")
+print("💡 Deployment Tips:")
+print("   • Copy the entire dist/HMI_OCR_System folder to the target PC")
+print("   • No internet needed (EasyOCR model is included)")
+print("   • Install VC++ Redistributable 2015-2022")
